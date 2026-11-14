@@ -2,7 +2,8 @@
 Type=Application
 Name=PDFtoMD
 Comment=Convierte PDF y Word a Markdown
-Exec=pdftomd
-Icon=text-markdown
+Exec=pdftomd %F
+Icon=pdftomd
 Terminal=false
 Categories=Office;Utility;
+MimeType=application/pdf;application/vnd.openxmlformats-officedocument.wordprocessingml.document;

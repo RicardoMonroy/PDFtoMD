@@ -1,0 +1,59 @@
+name: Build executables
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04 # older glibc = runs on more distros
+            asset: pdftomd-linux-x86_64
+          - os: windows-latest
+            asset: pdftomd-windows-x64
+          - os: macos-latest
+            asset: pdftomd-macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libxkbcommon0
+      - run: pip install . pyinstaller pillow
+      - run: pyinstaller --noconfirm pdftomd.spec
+      - name: Package
+        shell: bash
+        run: |
+          case "${{ runner.os }}" in
+            Linux)
+              cp pdftomd.desktop dist/ && cp src/pdftomd/icon.png dist/pdftomd.png
+              tar -C dist -czf ${{ matrix.asset }}.tar.gz pdftomd pdftomd.desktop pdftomd.png ;;
+            Windows) mv dist/pdftomd.exe ${{ matrix.asset }}.exe ;;
+            macOS) ditto -c -k --keepParent dist/PDFtoMD.app ${{ matrix.asset }}.zip ;;
+          esac
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}.*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: pdftomd-*
+          generate_release_notes: true

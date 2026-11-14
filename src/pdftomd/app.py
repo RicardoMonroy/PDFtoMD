@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QColor, QFontDatabase
+from PySide6.QtGui import QColor, QFontDatabase, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -206,11 +206,14 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("pdftomd")
     app.setDesktopFileName("pdftomd")
+    app.setWindowIcon(QIcon(str(Path(__file__).with_name("icon.png"))))
     font = QFontDatabase.systemFont(QFontDatabase.FixedFont)
     font.setPointSize(11)
     app.setFont(font)
     w = DropWindow()
     w.show()
+    if len(sys.argv) > 1:  # `pdftomd a.pdf b.docx` / "Open with" from the file manager
+        w.start([Path(a) for a in sys.argv[1:]])
     sys.exit(app.exec())
 
 
