@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pdftomd"
+version = "0.1.0"
+description = "Drag & drop PDF and Word files to convert them to Markdown (powered by MarkItDown)"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = [
+    "markitdown[pdf,docx]>=0.1.2",
+    "PySide6>=6.5",
+]
+
+[project.gui-scripts]
+pdftomd = "pdftomd.app:main"

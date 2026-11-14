@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=PDFtoMD
+Comment=Convierte PDF y Word a Markdown
+Exec=pdftomd
+Icon=text-markdown
+Terminal=false
+Categories=Office;Utility;
