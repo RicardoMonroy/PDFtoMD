@@ -3,18 +3,37 @@
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, QThread, Signal
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
+from PySide6.QtGui import QColor, QFontDatabase
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
     QLabel,
     QListWidget,
+    QListWidgetItem,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
 SUPPORTED = {".pdf", ".docx"}
+
+# Terminal palette (GitHub dark)
+BG, PANEL, BORDER = "#0d1117", "#161b22", "#30363d"
+FG, DIM, BLUE = "#c9d1d9", "#8b949e", "#58a6ff"
+OK, WARN, ERR = "#7ee787", "#d29922", "#f85149"
+
+STYLE = f"""
+QWidget {{ background: {BG}; color: {FG}; }}
+#prompt {{ color: {DIM}; }}
+#drop {{ border: 1px dashed {BORDER}; border-radius: 6px; color: {BLUE}; font-size: 15px; }}
+#drop[hover="true"] {{ border-color: {BLUE}; background: {PANEL}; }}
+QPushButton {{ background: transparent; color: {DIM}; border: none; padding: 4px; }}
+QPushButton:hover {{ color: {BLUE}; }}
+QListWidget {{ background: {BG}; border: none; border-top: 1px solid {BORDER}; padding-top: 6px; }}
+QListWidget::item {{ padding: 2px 0; }}
+QListWidget::item:selected {{ background: {PANEL}; color: inherit; }}
+"""
 
 
 def output_path(src: Path) -> Path:
@@ -39,7 +58,8 @@ def convert(src: Path, md=None) -> Path:
 
 
 class Worker(QObject):
-    progress = Signal(str)
+    started = Signal(int)            # index of file being converted
+    done = Signal(int, bool, str)    # index, ok, message
     finished = Signal()
 
     def __init__(self, files):
@@ -50,78 +70,145 @@ class Worker(QObject):
         from markitdown import MarkItDown  # slow import, keep off the UI thread
 
         md = MarkItDown()
-        for f in self.files:
+        for i, f in enumerate(self.files):
+            self.started.emit(i)
             try:
                 out = convert(f, md)
-                self.progress.emit(f"✔ {f.name}  →  {out.name}")
+                self.done.emit(i, True, out.name)
             except Exception as e:  # one bad file must not stop the batch
-                self.progress.emit(f"✘ {f.name}: {e}")
+                self.done.emit(i, False, str(e).splitlines()[0] if str(e) else type(e).__name__)
         self.finished.emit()
 
 
 class DropWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("PDFtoMD")
-        self.resize(560, 420)
+        self.setWindowTitle("pdftomd")
+        self.resize(600, 440)
         self.setAcceptDrops(True)
+        self.setStyleSheet(STYLE)
         self.thread = None
+        self.items = []
+        self.status = "suelta archivos .pdf o .docx aquí"
 
-        self.label = QLabel("Arrastra aquí archivos PDF o Word (.docx)\n\nEl Markdown se guarda en la misma carpeta")
-        self.label.setAlignment(Qt.AlignCenter)
-        self.label.setMinimumHeight(150)
-        self.label.setStyleSheet("border: 2px dashed palette(mid); border-radius: 12px; font-size: 15px;")
+        prompt = QLabel("$ pdftomd --drop")
+        prompt.setObjectName("prompt")
 
-        pick = QPushButton("O elige archivos…")
+        self.drop = QLabel()
+        self.drop.setObjectName("drop")
+        self.drop.setAlignment(Qt.AlignCenter)
+        self.drop.setTextFormat(Qt.RichText)
+        self.drop.setMinimumHeight(140)
+
+        pick = QPushButton("[ o elige archivos… ]")
+        pick.setCursor(Qt.PointingHandCursor)
         pick.clicked.connect(self.pick_files)
+
         self.log = QListWidget()
 
         layout = QVBoxLayout(self)
-        layout.addWidget(self.label)
-        layout.addWidget(pick)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.addWidget(prompt)
+        layout.addWidget(self.drop)
+        layout.addWidget(pick, alignment=Qt.AlignLeft)
         layout.addWidget(self.log)
+
+        self.cursor_on = True
+        self.blink = QTimer(self, interval=530, timeout=self.toggle_cursor)
+        self.blink.start()
+        self.render_drop()
+
+    # --- drop zone -------------------------------------------------------
+    def toggle_cursor(self):
+        self.cursor_on = not self.cursor_on
+        self.render_drop()
+
+    def render_drop(self):
+        # invisible block when off, so the text doesn't shift
+        cursor = f'<span style="color:{OK if self.cursor_on else BG}">█</span>'
+        self.drop.setText(f"[ {self.status} ]{cursor}")
+
+    def set_hover(self, on):
+        self.drop.setProperty("hover", on)
+        self.drop.style().polish(self.drop)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            self.set_hover(True)
+
+    def dragLeaveEvent(self, event):
+        self.set_hover(False)
+
+    def dropEvent(self, event):
+        self.set_hover(False)
+        self.start([Path(u.toLocalFile()) for u in event.mimeData().urls() if u.isLocalFile()])
 
     def pick_files(self):
         names, _ = QFileDialog.getOpenFileNames(self, "Elegir archivos", "", "Documentos (*.pdf *.docx)")
         self.start([Path(n) for n in names])
 
-    def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-
-    def dropEvent(self, event):
-        self.start([Path(u.toLocalFile()) for u in event.mimeData().urls() if u.isLocalFile()])
+    # --- log -------------------------------------------------------------
+    def add_line(self, text, color):
+        item = QListWidgetItem(text)
+        item.setForeground(QColor(color))
+        self.log.addItem(item)
+        self.log.scrollToBottom()
+        return item
 
     def start(self, paths):
         if self.thread and self.thread.isRunning():
-            self.log.addItem("⏳ Espera a que termine la conversión actual")
+            self.add_line("[!] espera a que termine la conversión actual", WARN)
             return
         files = [p for p in paths if p.suffix.lower() in SUPPORTED and p.is_file()]
         for p in paths:
             if p not in files:
-                self.log.addItem(f"– Ignorado (formato no soportado): {p.name}")
+                self.add_line(f"[-] {p.name}: formato no soportado", DIM)
         if not files:
             return
-        self.label.setText(f"Convirtiendo {len(files)} archivo(s)…")
+
+        self.files = files
+        self.items = [self.add_line(f"[ ] {f.name}", DIM) for f in files]
+        self.status = f"convirtiendo 0/{len(files)}…"
+        self.render_drop()
 
         self.thread = QThread()
         self.worker = Worker(files)
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
-        self.worker.progress.connect(self.on_progress)
+        self.worker.started.connect(self.on_started)
+        self.worker.done.connect(self.on_done)
         self.worker.finished.connect(self.thread.quit)
-        self.thread.finished.connect(lambda: self.label.setText("Listo. Arrastra más archivos"))
+        self.thread.finished.connect(self.on_finished)
         self.thread.start()
 
-    def on_progress(self, msg):
-        self.log.addItem(msg)
-        self.log.scrollToBottom()
+    def on_started(self, i):
+        self.items[i].setText(f"[~] {self.files[i].name}  convirtiendo…")
+        self.items[i].setForeground(QColor(WARN))
+
+    def on_done(self, i, ok, msg):
+        name = self.files[i].name
+        if ok:
+            self.items[i].setText(f"[✓] {name} → {msg}")
+            self.items[i].setForeground(QColor(OK))
+        else:
+            self.items[i].setText(f"[✗] {name}: {msg}")
+            self.items[i].setForeground(QColor(ERR))
+        self.status = f"convirtiendo {i + 1}/{len(self.files)}…"
+        self.render_drop()
+
+    def on_finished(self):
+        self.status = "listo · suelta más archivos"
+        self.render_drop()
 
 
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName("PDFtoMD")
+    app.setApplicationName("pdftomd")
     app.setDesktopFileName("pdftomd")
+    font = QFontDatabase.systemFont(QFontDatabase.FixedFont)
+    font.setPointSize(11)
+    app.setFont(font)
     w = DropWindow()
     w.show()
     sys.exit(app.exec())
